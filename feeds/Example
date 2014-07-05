@@ -1,0 +1,11 @@
+# Example RSS Feed
+# The host site for the RSS feed
+host=
+# The page resource for the RSS feed (note: no '/')
+link=
+# The name of the bot on the IRC channel this series will be downloaded from
+bot=
+
+# Include a have= for every file you already have, and don't want downloaded
+# More files will be added to this list as you download Them
+have=
