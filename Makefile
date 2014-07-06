@@ -1,7 +1,7 @@
 CC = gcc
-CFLAGS = -c -Wall -O2
+CFLAGS = -c -g -Wall -O2
 CPPFLAGS =
-LDFLAGS =
+LDFLAGS = -pthread
 SOURCES = $(wildcard src/*.c)
 OBJECTS = $(SOURCES:.c=.o)
 EXECUTABLE = rssdcc-bot

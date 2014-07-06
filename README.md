@@ -30,8 +30,6 @@ The config file for the IRC channel is `rssdcc.conf`.
 
 #TODO
 - Running as a daemon
-- Multiple simultaneous downloads
-- DCC resume
 - More configuration options
 - Better error checking
 - Better logging

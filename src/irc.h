@@ -22,6 +22,19 @@
 #define MAX_WELCOME_WAIT 10
 #define MAX_BOT_WAIT 10
 
+struct dcc_ent {
+	int fd;
+
+	char *ip;
+	char *port;
+
+	int filesize;
+	int position;
+
+	struct queue_ent *q;
+	struct dcc_ent *next;
+};
+
 char *host, *port, *nick;
 
 void do_irc();
