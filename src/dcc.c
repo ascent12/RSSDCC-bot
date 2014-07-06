@@ -35,20 +35,20 @@ static void send_ack(int sfd, int pos)
 	send(sfd, (char*)&net, 4, 0);
 }
 
-void dcc_do(char *title, char *ip, char *port, char *filesize)
+bool dcc_do(char *title, char *ip, char *port, char *filesize)
 {
 	int sfd;
 	int ofd;
 	int n, size, pos = 0;
 	char buf[4096];
-	bool need_ack = false;
+	bool need_ack = false, ret;
 
 	size = (int)strtol(filesize, NULL, 10);
 
 	ofd = open(title, O_CREAT | O_WRONLY);
 	if (ofd < 0) {
 		ERROR("Could not open '%s' for writing\n", title);
-		return;
+		return false;
 	}
 
 	sfd = socket_connect(ip, port);
@@ -56,21 +56,25 @@ void dcc_do(char *title, char *ip, char *port, char *filesize)
 	while (1) {
 		n = recv(sfd, buf, sizeof(buf), 0);
 
+		printf("\r[%dK/%dK]", pos>>10, size>>10);
+
 		if (n < 1) {
 			if (n < 0) {
 				if (errno == EAGAIN || errno == EWOULDBLOCK)
 					if (need_ack)
 						send_ack(sfd, pos);
 			} else {
-				ERROR("Unexpected DCC failure\n");
+				ERROR("Unexpected DCC failure; Closing connection\n");
+				ret = false;
 				goto close;
 			}
 		}
 
 		if (write(ofd, buf, n) < 0) {
-			ERROR("Unable to write DCC to file\n");
+			ERROR("Unable to write DCC to file; Closing connection\n");
 			if (need_ack)
 				send_ack(sfd, pos);
+			ret = false;
 			goto close;
 		}
 
@@ -79,7 +83,9 @@ void dcc_do(char *title, char *ip, char *port, char *filesize)
 
 		if (pos >= size) {
 			send_ack(sfd, pos);
-			printf("Sucessfully downloaded DCC file\n");
+			LOG("\r");
+			LOG("Sucessfully downloaded %s file\n", title);
+			ret = true;
 			goto close;
 		}
 	}
@@ -87,6 +93,7 @@ void dcc_do(char *title, char *ip, char *port, char *filesize)
 close:
 	close(sfd);
 	close(ofd);
+	return ret;
 }
 
 

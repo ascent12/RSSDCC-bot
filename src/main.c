@@ -165,7 +165,7 @@ static void rss_config_init()
 		return;
 	}
 
-	ERROR("No RSS feeds found. Exiting...");
+	ERROR("No RSS feeds found. Exiting...\n");
 	exit(EXIT_FAILURE);
 }
 
@@ -235,7 +235,7 @@ int main (int argc, char *argv[])
 	if (queue_head != NULL)
 		do_irc();
 
-	printf("All tasks finished! Exiting...");
+	LOG("All tasks finished! Exiting...\n");
 
 	rss_config_finalize();
 	irc_config_finalize();

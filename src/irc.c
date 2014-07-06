@@ -45,6 +45,24 @@ static void send_message(char *format, ...)
 	va_end(args);
 }
 
+static void config_add_episode(struct series_ent *sp, char *title)
+{
+	struct episode_ent *e;
+	FILE *file;
+
+	e = calloc(1, sizeof(*e));
+
+	e->name = title;
+
+	if (sp->head)
+		e->next = sp->head;
+	sp->head = e;
+
+	file = fopen(sp->filename, "a");
+	fprintf(file, "have=%s\n", title);
+	fclose(file);
+}
+
 static void parse_message()
 {
 	prefix = NULL;
@@ -115,16 +133,16 @@ void do_irc()
 	/* Main IRC loop */
 	while (q) {
 		/* Retrieving package number from bot */
-		send_message("PRIVMSG %s :@find %s", q->bot, q->title);
+		send_message("PRIVMSG %s :@find %s", q->series->bot, q->title);
 		old_time = time(NULL);
 		do {
 			parse_message();
 			if (time(NULL) - old_time > MAX_BOT_WAIT) {
-				WARNING("%s did not respond with package list; Skipping entry\n", q->bot);
+				WARNING("%s did not respond with package list; Skipping entry\n", q->series->bot);
 				q = q->next;
 				continue;
 			}
-		} while (strcmp(prefix, q->bot) != 0 &&
+		} while (strcmp(prefix, q->series->bot) != 0 &&
 			 strncmp("XDCC SERVER", trail, 11) != 0);
 
 		/* Finding package number */
@@ -132,16 +150,16 @@ void do_irc()
 		skip(trail, ':');
 
 		/* Requesting package */
-		send_message("PRIVMSG %s :xdcc send %s", q->bot, trail);
+		send_message("PRIVMSG %s :xdcc send %s", q->series->bot, trail);
 		old_time = time(NULL);
 		do {
 			parse_message();
 			if (time(NULL) - old_time > MAX_BOT_WAIT) {
-				WARNING("%s did not send DCC request; Skipping entry\n", q->bot);
+				WARNING("%s did not send DCC request; Skipping entry\n", q->series->bot);
 				q = q->next;
 				continue;
 			}
-		} while (strcmp(prefix, q->bot) != 0 &&
+		} while (strcmp(prefix, q->series->bot) != 0 &&
 			 strncmp("\001DCC SEND", trail, 9) != 0);
 
 		/* Splitting DCC parameters */
@@ -154,8 +172,10 @@ void do_irc()
 		port = skip(ip, ' ');
 		filesize = skip(port, ' ');
 
-		LOG("Downloading '%s' from '%s'", q->title, q->bot);
-		dcc_do(q->title, ip, port, filesize);
+		LOG("Downloading '%s' from '%s'\n", q->title, q->series->bot);
+		if (dcc_do(q->title, ip, port, filesize))
+			config_add_episode(q->series, q->title);
+			
 
 		q = q->next;
 	}

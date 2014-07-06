@@ -38,13 +38,13 @@ static void send_message(char *format, ...)
 	va_end(args);
 }
 
-static void queue_add(char *bot, char *title)
+static void queue_add(struct series_ent *sp, char *title)
 {
 	struct queue_ent *q;
 
 	q = calloc(1, sizeof(*q));
 
-	q->bot = bot;
+	q->series = sp;
 	q->title = title;
 
 	if (!queue_head) {
@@ -54,24 +54,6 @@ static void queue_add(char *bot, char *title)
 		queue_tail->next = q;
 		queue_tail = q;
 	}
-}
-
-static void config_add_episode(struct series_ent *sp, char *title)
-{
-	struct episode_ent *e;
-	FILE *file;
-
-	e = calloc(1, sizeof(*e));
-
-	e->name = title;
-
-	if (sp->head)
-		e->next = sp->head;
-	sp->head = e;
-
-	file = fopen(sp->filename, "a");
-	fprintf(file, "have=%s\n", title);
-	fclose(file);
 }
 
 static bool config_check_episode(struct series_ent *sp, char *buf)
@@ -126,8 +108,7 @@ static void parse_rss(struct series_ent *sp, char *buf)
 			title = calloc(1, strlen(buf) + 1);
 			strcpy(title, buf);
 
-			config_add_episode(sp, title);
-			queue_add(sp->bot, title);
+			queue_add(sp, title);
 		}
 
 		buf = ptr;

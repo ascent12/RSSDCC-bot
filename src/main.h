@@ -44,7 +44,7 @@ struct series_ent *series_list;
 
 struct queue_ent {
 	char *title;
-	char *bot;
+	struct series_ent *series;
 
 	struct queue_ent *next;
 };

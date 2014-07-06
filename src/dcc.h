@@ -19,6 +19,8 @@
 #ifndef DCC_H
 #define DCC_H
 
-void dcc_do(char *title, char *ip, char *port, char *filesize);
+#include <stdbool.h>
+
+bool dcc_do(char *title, char *ip, char *port, char *filesize);
 
 #endif
