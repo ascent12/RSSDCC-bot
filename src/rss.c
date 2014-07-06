@@ -101,9 +101,9 @@ static void parse_rss(struct series_ent *sp, char *buf)
 		replace_xml_escapes(buf);
 
 		if (config_check_episode(sp, buf)) {
-			printf("  Already have: %s\n", buf);
+			LOG("Already have: %s\n", buf);
 		} else {
-			printf("  Queueing: %s\n", buf);
+			LOG("Queueing: %s\n", buf);
 			
 			title = calloc(1, strlen(buf) + 1);
 			strcpy(title, buf);
