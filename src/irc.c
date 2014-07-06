@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "irc.h"
@@ -31,6 +32,9 @@
 
 int sfd;
 FILE *srv;
+char *buf = NULL;
+size_t bufsize = 0;
+char *prefix, *command, *params, *trail;
 
 static void send_message(char *format, ...)
 {
@@ -41,16 +45,13 @@ static void send_message(char *format, ...)
 	va_end(args);
 }
 
-static bool parse_message(struct queue_ent *q)
+static void parse_message()
 {
-	char *buf = NULL;
-	size_t bufsize = 0;
-	char *prefix = NULL, *command, *params, *trail;
+	prefix = NULL;
 
-	if (getline(&buf, &bufsize, srv) <= 0) {
-		free(buf);
-		return true;
-	}
+	/* No message */
+	if (getline(&buf, &bufsize, srv) <= 0)
+		return;
 
 	/* Finding the prefix and command start */
 	if (buf[0] == ':') {
@@ -71,56 +72,16 @@ static bool parse_message(struct queue_ent *q)
 	/* Splitting command and params */
 	params = skip(command, ' ');
 
+	/* Automatic PONG, as long as we're parsing */
 	if (!strcmp("PING", command))
 		send_message("PONG %s", trail?trail:params);
-
-	if (!strncmp(prefix, q->bot, strlen(q->bot))) {
-		printf(":%s %s %s : %s", prefix, command, params, trail);
-
-		if (!strcmp("NOTICE", command) && !strncmp("XDCC SERVER", trail, 11)) {
-			trail = skip(trail, '#');
-			skip(trail, ':');
-
-			send_message("PRIVMSG %s :xdcc send %s", q->bot, trail);
-			return false;
-		}
-
-		/* DCC message from bot has '1' at start, so trail must be incremented to skip it */
-		if (!strncmp("DCC SEND", ++trail, 8)) {
-			char *ip, *port, *filesize;
-
-			trail = skip(trail, '"');
-			trail = skip(trail, '"');
-
-			ip = ++trail;
-			port = skip(ip, ' ');
-			filesize = skip(port, ' ');
-
-			printf("Downloading '%s'", q->title);
-			dcc_do(q->title, ip, port, filesize);
-			return true;
-		}
-	}
-
-	free(buf);
-	return false;
-}
-
-static void queue_do()
-{
-	struct queue_ent *q = queue_head;
-
-	while(q) {
-		send_message("PRIVMSG %s :@find %s", q->bot, q->title);
-
-		while(!parse_message(q));
-
-		q = q->next;
-	}
 }
 
 void do_irc()
 {
+	struct queue_ent *q = queue_head;
+	time_t old_time;
+
 	sfd = socket_connect(host, port);
 	srv = fdopen(sfd, "r+");
 
@@ -131,9 +92,79 @@ void do_irc()
 
 	setbuf(srv, NULL);
 
-	queue_do();
+	/* Waiting for 001 RPL_WELCOME */
+	old_time = time(NULL);
+	do {
+		parse_message();
+		if (time(NULL) - old_time > MAX_WELCOME_WAIT) {
+			ERROR("%s did not return 001 RPL_WELCOME; Disconnecting\n", host);
+			goto cleanup;
+		}
+	} while (strcmp("001", command) != 0);
 
+	/* Waiting for 376 RPL_ENDOFMOTD */
+	old_time = time(NULL);
+	do {
+		parse_message();
+		if (time(NULL) - old_time > MAX_WELCOME_WAIT) {
+			ERROR("%s did not finish MOTD; Disconnecting\n", host);
+			goto cleanup;
+		}
+	} while (strcmp("376", command) != 0);
+
+	/* Main IRC loop */
+	while (q) {
+		/* Retrieving package number from bot */
+		send_message("PRIVMSG %s :@find %s", q->bot, q->title);
+		old_time = time(NULL);
+		do {
+			parse_message();
+			if (time(NULL) - old_time > MAX_BOT_WAIT) {
+				WARNING("%s did not respond with package list; Skipping entry\n", q->bot);
+				q = q->next;
+				continue;
+			}
+		} while (strcmp(prefix, q->bot) != 0 &&
+			 strncmp("XDCC SERVER", trail, 11) != 0);
+
+		/* Finding package number */
+		trail = skip(trail, '#');
+		skip(trail, ':');
+
+		/* Requesting package */
+		send_message("PRIVMSG %s :xdcc send %s", q->bot, trail);
+		old_time = time(NULL);
+		do {
+			parse_message();
+			if (time(NULL) - old_time > MAX_BOT_WAIT) {
+				WARNING("%s did not send DCC request; Skipping entry\n", q->bot);
+				q = q->next;
+				continue;
+			}
+		} while (strcmp(prefix, q->bot) != 0 &&
+			 strncmp("\001DCC SEND", trail, 9) != 0);
+
+		/* Splitting DCC parameters */
+		char *ip, *port, *filesize;
+
+		trail = skip(trail, '"');
+		trail = skip(trail, '"');
+
+		ip = ++trail;
+		port = skip(ip, ' ');
+		filesize = skip(port, ' ');
+
+		LOG("Downloading '%s' from '%s'", q->title, q->bot);
+		dcc_do(q->title, ip, port, filesize);
+
+		q = q->next;
+	}
+
+	LOG("Download queue completed; Disconnecting");
+
+cleanup:
 	send_message("QUIT");
+	free(buf);
 	fclose(srv);
 	close(sfd);
 }

@@ -29,6 +29,7 @@
 
 #define WARNING(format, ...)	MESSAGE("WARNING", format, ## __VA_ARGS__)
 #define ERROR(format, ...)	MESSAGE("ERROR", format, ## __VA_ARGS__)
+#define LOG(format, ...)	MESSAGE("LOG", format, ## __VA_ARGS__)
 
 char *skip(char *s, char c);
 

@@ -19,6 +19,9 @@
 #ifndef IRC_H
 #define IRC_H
 
+#define MAX_WELCOME_WAIT 10
+#define MAX_BOT_WAIT 10
+
 char *host, *port, *nick;
 
 void do_irc();
