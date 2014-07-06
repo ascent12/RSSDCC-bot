@@ -120,13 +120,13 @@ static void draw_progress()
 	printf("\033[F");
 
 	if (dp != NULL) {
-		printf("\r%.30s... [%dKiB/%dKiB] %.1f%%", dp->q->title,
+		printf("\r%.30s... [%dKiB/%dKiB] %.1f%%\n", dp->q->title,
 				dp->position>>10, dp->filesize>>10,
 				(float)dp->position / (float)dp->filesize * 100);
 
 		dp = dp->next;
 		if (dp != NULL) {
-			printf("\n%.30s... [%dKiB/%dKiB] %.1f%%", dp->q->title,
+			printf("%.30s... [%dKiB/%dKiB] %.1f%%", dp->q->title,
 					dp->position>>10, dp->filesize>>10,
 					(float)dp->position / (float)dp->filesize * 100);	
 		}
