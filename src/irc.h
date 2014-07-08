@@ -35,7 +35,7 @@ struct dcc_ent {
 	struct dcc_ent *next;
 };
 
-char *host, *port, *nick;
+char *host, *port, *nick, *chan, *downloads_name;
 
 void do_irc();
 

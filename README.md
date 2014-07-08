@@ -26,11 +26,8 @@ Place a file for each RSS feed inside the `feeds` directory.
 
 Note: Be VERY specific with the RSS feed you provide, otherwise you'll probably get some other crap you don't want to download making it into the feed.
 
-The config file for the IRC channel is `rssdcc.conf`.
+The main config file is `~/rssdcc`.
 
 #TODO
-- Running as a daemon
-- More configuration options
-- Better error checking
-- Better logging
-- v2 checking
+- Support for more bot messages
+- Monitor download speed and progress

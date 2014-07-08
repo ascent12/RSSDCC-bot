@@ -11,4 +11,16 @@ host=irc.rizon.net
 port=6667
 
 #Nick: Nick used on the IRC server
-nick=guest
+nick=guest123
+
+#Chan: IRC channel
+chan=news
+
+#Feeds: The directory containing the RSS feeds
+feeds=/home/user/.feeds
+
+#Log: The name of the log file
+log=/home/user/.rssdcc.log
+
+#Downloads: Where downloaded files are saved
+downloads=/home/user/Downloads

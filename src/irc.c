@@ -20,6 +20,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -42,10 +43,13 @@ FILE *srv;
 char *buf = NULL;
 size_t bufsize = 0;
 char *prefix, *command, *params, *trail;
-pthread_t thread[MAX_NUM_THREADS];
-int open_threads = 0;
 
-struct dcc_ent *list = NULL;
+/* Set empty strings to this, instead of NULL, to prevent errors */
+char nul = '\0';
+
+pthread_t thread[MAX_NUM_THREADS], ping_thread;
+pthread_attr_t dcc_attr, ping_attr;
+sem_t dcc_download;
 
 static void send_message(char *format, ...)
 {
@@ -74,13 +78,81 @@ static void config_add_episode(struct series_ent *sp, char *title)
 	fclose(file);
 }
 
+static void send_ack(int sfd, int pos)
+{
+	uint32_t net = htonl(pos & 0xFFFFFFFF);
+	send(sfd, (char*)&net, 4, 0);
+}
+
+static void *dcc_do(void *data)
+{
+	struct dcc_ent *dp = data;
+	int sfd, n;
+	char dcc_buf[4096];
+	bool need_ack = false;
+
+	sfd = socket_connect(dp->ip, dp->port);
+
+	/* Main DCC loop */
+	while (1) {
+		printf("%s [%dKiB/%dKib] %.1f%%\n", dp->q->title,
+				dp->position>>10, dp->filesize>>10,
+				(float)dp->position / (float)dp->filesize * 100);
+		n = recv(sfd, dcc_buf, sizeof(dcc_buf), 0);
+
+		if (n < 1) {
+			if (n < 0) {
+				if (errno == EAGAIN || errno == EWOULDBLOCK)
+					if (need_ack)
+						send_ack(sfd, dp->position);
+			} else {
+				WARNING("Unexpected DCC failure for %s; Closing connection\n",
+						dp->q->title);
+				break;
+			}
+		}
+
+		if (write(dp->fd, dcc_buf, n) < 0) {
+			WARNING("Unable to write DCC to file for %s; Closing connection\n",
+					dp->q->title);
+			if (need_ack)
+				send_ack(sfd, dp->position);
+			break;
+		}
+
+		dp->position += n;
+		need_ack = true;
+
+		if (dp->position >= dp->filesize) {
+			send_ack(sfd, dp->position);
+			LOG("\r");
+			LOG("Sucessfully downloaded %s\n", dp->q->title);
+			config_add_episode(dp->q->series, dp->q->title);
+			break;
+		}
+	}
+
+	/* Cleanup */
+	close(sfd);
+	close(dp->fd);
+	free(dp->ip);
+	free(dp->port);
+	free(dp);
+
+	/* Thread is closed here */
+	sem_post(&dcc_download);
+	return 0;
+}
+
 static void parse_message()
 {
-	prefix = NULL;
+	prefix = &nul;
 
-	/* No message */
 	if (getline(&buf, &bufsize, srv) <= 0)
+		/* No message */
 		return;
+
+	DEBUG("%s", buf);
 
 	/* Finding the prefix and command start */
 	if (buf[0] == ':') {
@@ -96,6 +168,8 @@ static void parse_message()
 		*trail = '\0';
 		trail += 2;
 		trim(trail);
+	} else {
+		trail = &nul;
 	}
 
 	/* Splitting command and params */
@@ -106,206 +180,208 @@ static void parse_message()
 		send_message("PONG %s", trail?trail:params);
 }
 
-
-static void send_ack(int sfd, int pos)
+static void *ping(void *data)
 {
-	uint32_t net = htonl(pos & 0xFFFFFFFF);
-	send(sfd, (char*)&net, 4, 0);
-}
-
-static void draw_progress()
-{
-	struct dcc_ent *dp = list;
-
-	printf("\033[F");
-
-	if (dp != NULL) {
-		printf("\r%.30s... [%dKiB/%dKiB] %.1f%%\n", dp->q->title,
-				dp->position>>10, dp->filesize>>10,
-				(float)dp->position / (float)dp->filesize * 100);
-
-		dp = dp->next;
-		if (dp != NULL) {
-			printf("%.30s... [%dKiB/%dKiB] %.1f%%", dp->q->title,
-					dp->position>>10, dp->filesize>>10,
-					(float)dp->position / (float)dp->filesize * 100);	
-		}
-	}
-}
-
-static void *dcc_do(void *data)
-{
-	struct dcc_ent *dp = data;
-	int sfd, n;
-	char dcc_buf[4096];
-	bool need_ack = false;
-
-	sfd = socket_connect(dp->ip, dp->port);
-
-	/* Main DCC loop */
+	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
 	while (1) {
-		n = recv(sfd, dcc_buf, sizeof(dcc_buf), 0);
-
-		if (n < 1) {
-			if (n < 0) {
-				if (errno == EAGAIN || errno == EWOULDBLOCK)
-					if (need_ack)
-						send_ack(sfd, dp->position);
-			} else {
-				ERROR("Unexpected DCC failure; Closing connection\n");
-				break;
-			}
-		}
-
-		if (write(dp->fd, dcc_buf, n) < 0) {
-			ERROR("Unable to write DCC to file; Closing connection\n");
-			if (need_ack)
-				send_ack(sfd, dp->position);
-			break;
-		}
-
-		dp->position += n;
-		need_ack = true;
-
-		if (dp->position >= dp->filesize) {
-			send_ack(sfd, dp->position);
-			LOG("\r");
-			LOG("Sucessfully downloaded '%s'\n", dp->q->title);
-			config_add_episode(dp->q->series, dp->q->title);
-			break;
-		}
+		parse_message();
+		/* To stop it from going too crazy */
+		sleep(1);
 	}
-
-	/* Cleanup */
-	list = dp->next;
-	close(sfd);
-	close(dp->fd);
-	free(dp->ip);
-	free(dp->port);
-	free(dp);
-
-	/* Thread is closed here */
-	--open_threads;
 	return 0;
 }
 
-static bool dcc_create(struct queue_ent *q, char *dcc, int i)
+static void dcc_create(struct queue_ent *q, char *dcc, int i)
 {
-	struct dcc_ent *dp;
+	struct dcc_ent *d;
 	struct stat stat;
 	char *ptr = dcc;
 	char pos_str[20];
+	char filename[256] = {0};
 	time_t old_time;
 
-	dp = calloc(1, sizeof(*dp));
+	d = calloc(1, sizeof(*d));
+	if (!d) {
+		ERROR("Unable to allocate DCC structure: Out of Memory; Exiting...\n");
+		exit(EXIT_FAILURE);
+	}
 
+	/* Getting IP address of DCC bot */
 	ptr = skip(dcc, ' ');
-	dp->ip = calloc(1, strlen(dcc) + 1);
-	strcpy(dp->ip, dcc);
+	d->ip = calloc(1, strlen(dcc) + 1);
+	if (!d->ip) {
+		ERROR("Unable to allocate ip string: Out of Memory; Exiting...\n");
+		exit(EXIT_FAILURE);
+	}
+	strcpy(d->ip, dcc);
 	dcc = ptr;
 
+	/* Getting port of the DCC bot */
 	ptr = skip(dcc, ' ');
-	dp->port = calloc(1, strlen(dcc) + 1);
-	strcpy(dp->port, dcc);
+	d->port = calloc(1, strlen(dcc) + 1);
+	if (!d->port) {
+		ERROR("Unable to allocate port string: Out of Memory; Exiting...\n");
+		exit(EXIT_FAILURE);
+	}
+	strcpy(d->port, dcc);
 	
-	dp->filesize = (int)strtol(ptr, NULL, 10);
-	dp->q = q;
+	d->filesize = (int)strtol(ptr, NULL, 10);
+	d->q = q;
 
-	if ((dp->fd = open(q->title, O_CREAT | O_WRONLY)) < 0) {
-		ERROR("Could not open '%s' for writing\n", q->title);
-		goto cleanup;
+	strcat(filename, downloads_name);
+	strcat(filename, "/");
+	strcat(filename, q->title);
+
+	d->fd = open(filename, O_CREAT | O_WRONLY);
+	if (d < 0) {
+		WARNING("Could not open %s for writing; Skipping entry...\n", q->title);
+		free(d->ip);
+		free(d->port);
+		free(d);
+		sem_post(&dcc_download);
+		return;
 	}
 
 	/* Checking too see if file is empty or not */
-	if (!fstat(dp->fd, &stat)) {
-		if ((dp->position = stat.st_size) != 0) {
+	if (!fstat(d->fd, &stat)) {
+		if ((d->position = stat.st_size) != 0) {
 			/* Using DCC resume */
-			if (dp->position >= dp->filesize) {
-				LOG("Found completed '%s'; Skipping", q->title);
-				return true;
+			DEBUG("Existing file found; Attempting DCC resume...\n");
+
+			if (d->position >= d->filesize) {
+				LOG("Found completed %s; Skipping", q->title);
+			sem_post(&dcc_download);
+				return;
 			}
 
-			snprintf(pos_str, 20, "%d", dp->position);
+			snprintf(pos_str, 20, "%d", d->position);
 
 			send_message("PRIVMSG %s :\001DCC RESUME \"%s\" %s %s\001",
-					q->series->bot, q->title, dp->port, pos_str);
+					q->series->bot, q->title, d->port, pos_str);
+			DEBUG("PRIVMSG %s :DCC RESUME \"%s\" %s %s\n",
+					q->series->bot, q->title, d->port, pos_str);
 			old_time = time(NULL);
 			do {
 				parse_message();
 				if (time(NULL) - old_time > MAX_BOT_WAIT) {
 					LOG("DCC ACCEPT not recived; Continuing from start\n");
-					dp->position = 0;
+					d->position = 0;
 					goto out;
 				}
 			} while (strcmp(prefix, q->series->bot) != 0 &&
 				 strncmp("\001DCC ACCEPT", trail, 11) != 0);
 
-			LOG("Resuming '%s'\n", q->title);
-			lseek(dp->fd, 0, SEEK_END);
+			LOG("Resuming %s\n", q->title);
+			lseek(d->fd, 0, SEEK_END);
 		}
 	} else {
-		WARNING("Could not stat '%s'; Assuming it's empty\n", q->title);
+		WARNING("Could not stat %s; Assuming it's empty\n", q->title);
 	}
 
 out:
-	dp->next = list;
-	list = dp;
-
-	++open_threads;
-	pthread_create(&thread[i], NULL, dcc_do, (void*)dp);
-
-	return true;
-
-cleanup:
-	free(dp->ip);
-	free(dp->port);
-	free(dp);
-	return false;
+	pthread_create(&thread[i], &dcc_attr, dcc_do, (void*)d);
 }
 
 void do_irc()
 {
-	struct queue_ent *q;
+	struct queue_ent *q, *tmp;
 	time_t old_time;
 	bool timeout;
 	int i = 0;
 
+	DEBUG("Connecting to %s:%s\n", host, port);
+
+	/* Opening socket to IRC channel */
 	sfd = socket_connect(host, port);
+	if (sfd < 0) {
+		WARNING("Unable to open socket for %s:%s; Download queue failed...\n",
+				host, port);
+		goto error0;
+	}
+
+	/* Opening the socket as a file */
 	srv = fdopen(sfd, "r+");
+	if (!srv) {
+		WARNING("Unable to open socket as file for %s:%s; Download queue failed...\n",
+				host, port);
+		goto error0;
+	}
+
+	/* Creating a semaphore to limit amount of concurrent downloads */
+	if (sem_init(&dcc_download, 0, MAX_NUM_THREADS) < 0) {
+		WARNING("Unable to open semaphore; Download queue failed...\n");
+		goto error0;
+	}
+
+	/* Setting pthread attributes, which are used later */
+	pthread_attr_init(&dcc_attr);
+	pthread_attr_setdetachstate(&dcc_attr, PTHREAD_CREATE_DETACHED);
 
 	/* Login */
+	DEBUG("Sending credentials: %s\n", nick);
+
 	send_message("NICK %s", nick);
 	send_message("USER %s * * :%s", nick, nick);
 	fflush(srv);
 
 	setbuf(srv, NULL);
-//	setbuf(stdout, NULL);
 
 	/* Waiting for 001 RPL_WELCOME */
 	old_time = time(NULL);
 	do {
 		parse_message();
 		if (time(NULL) - old_time > MAX_WELCOME_WAIT) {
-			ERROR("%s did not return 001 RPL_WELCOME; Disconnecting\n", host);
-			goto cleanup;
+			WARNING("%s did not return 001 RPL_WELCOME; Disconnecting\n", host);
+			goto error1;
 		}
 	} while (strcmp("001", command) != 0);
+	DEBUG("001 RPL_WELCOME recieved\n");
 
 	/* Waiting for 376 RPL_ENDOFMOTD */
 	old_time = time(NULL);
 	do {
 		parse_message();
 		if (time(NULL) - old_time > MAX_WELCOME_WAIT) {
-			ERROR("%s did not finish MOTD; Disconnecting\n", host);
-			goto cleanup;
+			WARNING("%s did not finish MOTD; Disconnecting\n", host);
+			goto error1;
 		}
 	} while (strcmp("376", command) != 0);
+	DEBUG("376 RPL_ENDOFMOTD recieved\n");
+
+	/* Joining channel and waiting for 332 RPL_TOPIC */
+	send_message("JOIN #%s", chan);
+	old_time = time(NULL);
+	do {
+		parse_message();
+		if (time(NULL) - old_time > MAX_WELCOME_WAIT) {
+			WARNING("Could not join #%s; Continuing...\n", chan);
+			WARNING("  Note: This may cause your download request to be rejected\n");
+			break;
+		}
+	} while (strcmp("332", command) != 0);
+	DEBUG("Joined #%s\n", chan);
 
 	/* Main IRC loop */
 	for (q = queue_head; q; q = q->next, timeout = false) {
+		/* Create a seperate thread to handle pinging,
+		 * as the main thread may get blocked */
+		pthread_create(&ping_thread, &ping_attr, ping, NULL);
+
+		int semv;
+		sem_getvalue(&dcc_download, &semv);
+		DEBUG("Trying to grab semaphore\n");
+		DEBUG("Current semaphore value is %d\n", semv);
+
+		/* Block when max threads are open */
+		sem_wait(&dcc_download);
+
+		/* Close the pinging thread, as it will screw with
+		 * us trying to negotiate a DCC connection */
+		pthread_cancel(ping_thread);
 
 		/* Retrieving package number from bot */
 		send_message("PRIVMSG %s :@find %s", q->series->bot, q->title);
+		DEBUG("PRIVMSG %s :@find %s\n", q->series->bot, q->title);
 		old_time = time(NULL);
 		do {
 			parse_message();
@@ -317,8 +393,10 @@ void do_irc()
 		} while (strcmp(prefix, q->series->bot) != 0 &&
 			 strncmp("XDCC SERVER", trail, 11) != 0);
 
-		if (timeout)
+		if (timeout) {
+			sem_post(&dcc_download);
 			continue;
+		}
 
 		/* Finding package number */
 		trail = skip(trail, '#');
@@ -326,6 +404,7 @@ void do_irc()
 
 		/* Requesting package */
 		send_message("PRIVMSG %s :xdcc send %s", q->series->bot, trail);
+		DEBUG("PRIVMSG %s :xdcc send %s\n", q->series->bot, trail);
 		old_time = time(NULL);
 		do {
 			parse_message();
@@ -337,35 +416,39 @@ void do_irc()
 		} while (strcmp(prefix, q->series->bot) != 0 &&
 			 strncmp("\001DCC SEND", trail, 9) != 0);
 
-		if (timeout)
+		if (timeout) {
+			sem_post(&dcc_download);
 			continue;
+		}
 
 		/* Splitting DCC parameters */
-
 		trail = skip(trail, '"');
 		trail = skip(trail, '"');
 
-		LOG("Downloading '%s' from '%s'\n", q->title, q->series->bot);
+		LOG("Downloading %s from %s\n", q->title, q->series->bot);
 		dcc_create(q, ++trail, i++);
-
-		/* Block when max threads are open */
-		while (open_threads >= MAX_NUM_THREADS) {
-			draw_progress();
-//			parse_message();
-		}
 	}
 
 	/* Block if everything hasn't completed */
-	while (open_threads != 0) {
-		draw_progress();
-//		parse_message();
-	}
+	int val;
+	do
+		sem_getvalue(&dcc_download, &val);
+	while (val != MAX_NUM_THREADS);
 
 	LOG("Download queue completed; Disconnecting\n");
 
-cleanup:
+error1:
 	send_message("QUIT");
 	free(buf);
+
+error0:
+	q = queue_head;
+	while (q) {
+		tmp = q;
+		q = q->next;
+		free(tmp);
+	}
+
 	fclose(srv);
 	close(sfd);
 }

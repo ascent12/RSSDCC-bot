@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -c -g -Wall -O2
+CFLAGS = -c -Wall -O2
 CPPFLAGS =
 LDFLAGS = -pthread
 SOURCES = $(wildcard src/*.c)
@@ -7,6 +7,10 @@ OBJECTS = $(SOURCES:.c=.o)
 EXECUTABLE = rssdcc-bot
 
 all: $(SOURCES) $(EXECUTABLE)
+
+debug: CFLAGS += -g
+debug: CPPFLAGS += -DENABLE_DEBUG
+debug: all
 
 $(EXECUTABLE): $(OBJECTS)
 	@echo "  LD        $@"

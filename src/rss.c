@@ -43,6 +43,10 @@ static void queue_add(struct series_ent *sp, char *title)
 	struct queue_ent *q;
 
 	q = calloc(1, sizeof(*q));
+	if (!q) {
+		ERROR("Unable to allocate queue structure: Out of Memory; Exiting...\n");
+		exit(EXIT_FAILURE);
+	}
 
 	q->series = sp;
 	q->title = title;
@@ -59,6 +63,7 @@ static void queue_add(struct series_ent *sp, char *title)
 static bool config_check_episode(struct series_ent *sp, char *buf)
 {
 	struct episode_ent *ep = sp->head;
+
 	while (ep && strcmp(buf, ep->name) != 0)
 		ep = ep->next;
 
@@ -100,11 +105,18 @@ static void parse_rss(struct series_ent *sp, char *buf)
 
 		replace_xml_escapes(buf);
 
+		DEBUG("RSS ENTRY: %s\n", buf);
+
 		if (!config_check_episode(sp, buf)) {
-			LOG("Queuing: %s\n", buf);
-			
 			title = calloc(1, strlen(buf) + 1);
+			if (!title) {
+				ERROR("Unable to allocate title from RSS: Out of Memory; Exiting...\n");
+				exit(EXIT_FAILURE);
+			}
+
 			strcpy(title, buf);
+
+			LOG("Queuing: %s\n", buf);	
 
 			queue_add(sp, title);
 		}
@@ -116,13 +128,26 @@ static void parse_rss(struct series_ent *sp, char *buf)
 
 void do_rss()
 {
-	struct series_ent *sp = series_list;
+	struct series_ent *sp;
 	char *buf = NULL;
 	size_t bufsize = 0;
 
-	while (sp) {
+	for (sp = series_list; sp != NULL; sp = sp->next) {
 		sfd = socket_connect(sp->host, "80");
+		if (sfd < 0) {
+			WARNING("Unable to open socket to %s:80 for %s; Skipping...\n",
+					sp->host, sp->filename);
+			continue;
+		}
+
 		srv = fdopen(sfd, "r+");
+		if (!srv) {
+			WARNING("Unable to open socket as file for %s; Skipping...\n",
+					sp->filename);
+			continue;
+		}
+
+		DEBUG("Querying %s/%s\n", sp->host, sp->link);
 
 		send_message("GET /%s HTTP/1.1", sp->link);
 		send_message("Host: %s", sp->host);
@@ -134,7 +159,6 @@ void do_rss()
 
 		fclose(srv);
 		close(sfd);
-		sp = sp->next;
 	}
 
 	free(buf);

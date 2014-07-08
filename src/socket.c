@@ -38,7 +38,7 @@ int socket_connect(char *server, char *port)
 	hints.ai_socktype = SOCK_STREAM;
 
 	if (getaddrinfo(server, port, &hints, &result) != 0) {
-		ERROR("getaddrinfo failed for %s:%s\n", server, port);
+		WARNING("getaddrinfo failed for %s:%s\n", server, port);
 		return -1;
 	}
 	
@@ -54,7 +54,7 @@ int socket_connect(char *server, char *port)
 	}
 
 	if (rp == NULL) {
-		ERROR("Could not connect to %s:%s\n", server, port);
+		WARNING("Could not connect to %s:%s\n", server, port);
 		return -1;
 	}
 

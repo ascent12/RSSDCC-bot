@@ -23,13 +23,28 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+time_t _time;
+struct tm *_timeinfo;
+char _timebuf[9];
+
+FILE *logfile;
 
 #define MESSAGE(type, format, ...) \
-	fprintf(stderr, "[" type "]: " format, ## __VA_ARGS__);
+	time(&_time); \
+	_timeinfo = localtime(&_time); \
+	strftime(_timebuf, 9, "%X", _timeinfo); \
+	fprintf(logfile, "[" type "%s]: " format, _timebuf, ## __VA_ARGS__);
 
-#define WARNING(format, ...)	MESSAGE("WARNING", format, ## __VA_ARGS__)
-#define ERROR(format, ...)	MESSAGE("ERROR", format, ## __VA_ARGS__)
-#define LOG(format, ...)	MESSAGE("LOG", format, ## __VA_ARGS__)
+#ifdef ENABLE_DEBUG
+#define DEBUG(format, ...)	MESSAGE("DEBUG-",   format, ## __VA_ARGS__)
+#else
+#define DEBUG(format, ...)
+#endif
+#define WARNING(format, ...)	MESSAGE("WARNING-", format, ## __VA_ARGS__)
+#define ERROR(format, ...)	MESSAGE("ERROR-",   format, ## __VA_ARGS__)
+#define LOG(format, ...)	MESSAGE("",         format, ## __VA_ARGS__)
 
 char *skip(char *s, char c);
 

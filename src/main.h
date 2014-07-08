@@ -25,8 +25,6 @@ struct episode_ent {
 };
 
 struct series_ent {
-	int id;
-
 	char *filename;
 
 	char *host;
