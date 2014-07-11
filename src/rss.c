@@ -156,6 +156,7 @@ void do_rss()
 
 		while (getline(&buf, &bufsize, srv) > 0)
 			parse_rss(sp, buf);
+		DEBUG("\n");
 
 		fclose(srv);
 		close(sfd);

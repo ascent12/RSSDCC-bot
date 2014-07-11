@@ -68,4 +68,5 @@ void socket_send_message(FILE *stream, char *format, va_list args)
 
 	vsnprintf(bufout, sizeof(bufout), format, args);
 	fprintf(stream, "%s\r\n", bufout);
+	DEBUG("%s\n", bufout);
 }

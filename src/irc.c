@@ -100,9 +100,14 @@ static void *dcc_do(void *data)
 
 		if (n < 1) {
 			if (n < 0) {
-				if (errno == EAGAIN || errno == EWOULDBLOCK)
-					if (need_ack)
+				if (errno == EAGAIN || errno == EWOULDBLOCK) {
+					if (need_ack) {
 						send_ack(sfd, dp->position);
+						need_ack = false;
+					}
+
+					continue;
+				}
 			} else {
 				WARNING("Unexpected DCC failure for %s: %s; Closing connection\n",
 						dp->q->title, strerror(errno));
@@ -188,6 +193,35 @@ static void *ping()
 	return 0;
 }
 
+static bool wait_for_command(char *str, int max_wait)
+{
+	time_t old_time = time(NULL);
+	int len = strlen(str);
+
+	do {
+		parse_message();
+		if (time(NULL) - old_time > max_wait)
+			return false;
+	} while (strncmp(str, command, len) != 0);
+
+	return true;
+}
+
+static bool wait_for_trail(char *str, char *bot, int max_wait)
+{
+	time_t old_time = time(NULL);
+	int len = strlen(str);
+
+	do {
+		parse_message();
+		if (time(NULL) - old_time > max_wait)
+			return false;
+	} while (strcmp(prefix, bot) != 0 &&
+		 strncmp(str, trail, len) != 0);
+
+	return true;
+}
+
 static void dcc_create(struct queue_ent *q, char *dcc, int i)
 {
 	struct dcc_ent *d;
@@ -195,7 +229,6 @@ static void dcc_create(struct queue_ent *q, char *dcc, int i)
 	char *ptr = dcc;
 	char pos_str[20];
 	char filename[256] = {0};
-	time_t old_time;
 	off_t off;
 
 	d = calloc(1, sizeof(*d));
@@ -241,56 +274,41 @@ static void dcc_create(struct queue_ent *q, char *dcc, int i)
 	}
 
 	/* Checking too see if file is empty or not */
-	if (!fstat(d->fd, &stat)) {
-		if ((d->position = stat.st_size) != 0) {
-			/* Using DCC resume */
-			DEBUG("Existing file found; Attempting DCC resume...\n");
+	if (!fstat(d->fd, &stat) && (d->position = stat.st_size) != 0) {
+		/* Using DCC resume */
+		DEBUG("Existing file found; Attempting DCC resume...\n");
 
-			if (d->position >= d->filesize) {
-				LOG("Found completed %s; Skipping\n", q->title);
-				config_add_episode(q->series, q->title);
-				sem_post(&dcc_download);
-				return;
-			}
+		if (d->position >= d->filesize) {
+			LOG("Found completed %s; Skipping\n", q->title);
+			config_add_episode(q->series, q->title);
+			sem_post(&dcc_download);
+			return;
+		}
 
-			snprintf(pos_str, 20, "%d", d->position);
+		snprintf(pos_str, 20, "%d", d->position);
 
-			send_message("PRIVMSG %s :\001DCC RESUME \"%s\" %s %s\001",
-					q->series->bot, q->title, d->port, pos_str);
-			DEBUG("PRIVMSG %s :DCC RESUME \"%s\" %s %s\n",
-					q->series->bot, q->title, d->port, pos_str);
-			old_time = time(NULL);
-			do {
-				parse_message();
-				if (time(NULL) - old_time > MAX_BOT_WAIT) {
-					LOG("DCC ACCEPT not recived; Continuing from start\n");
-					d->position = 0;
-					goto out;
-				}
-			} while (strcmp(prefix, q->series->bot) != 0 &&
-				 strncmp("\001DCC ACCEPT", trail, 11) != 0);
-
+		send_message("PRIVMSG %s :\001DCC RESUME \"%s\" %s %s\001",
+				q->series->bot, q->title, d->port, pos_str);
+		if(wait_for_trail("\001DCC ACCEPT", q->series->bot, MAX_BOT_WAIT)) {
 			LOG("Resuming %s\n", q->title);
 
 			off = lseek(d->fd, d->position, SEEK_SET);
 			if (off != d->position) {
-				WARNING("Cannot seek file; skipping entry...\n");
-				return;
+				WARNING("Cannot seek file; Continuing from start...\n");
+				d->position = 0;
 			}
+		} else {
+			LOG("DCC ACCEPT not recived; Continuing from start\n");
+			d->position = 0;
 		}
-	} else {
-		WARNING("Could not stat %s; Assuming it's empty\n", q->title);
 	}
 
-out:
 	pthread_create(&thread[i], &dcc_attr, dcc_do, (void*)d);
 }
 
 void do_irc()
 {
 	struct queue_ent *q, *tmp;
-	time_t old_time;
-	bool timeout;
 	int i = 0;
 
 	DEBUG("Connecting to %s:%s\n", host, port);
@@ -322,8 +340,6 @@ void do_irc()
 	pthread_attr_setdetachstate(&dcc_attr, PTHREAD_CREATE_DETACHED);
 
 	/* Login */
-	DEBUG("Sending credentials: %s\n", nick);
-
 	send_message("NICK %s", nick);
 	send_message("USER %s * * :%s", nick, nick);
 	fflush(srv);
@@ -331,42 +347,30 @@ void do_irc()
 	setbuf(srv, NULL);
 
 	/* Waiting for 001 RPL_WELCOME */
-	old_time = time(NULL);
-	do {
-		parse_message();
-		if (time(NULL) - old_time > MAX_WELCOME_WAIT) {
-			WARNING("%s did not return 001 RPL_WELCOME; Disconnecting\n", host);
-			goto error1;
-		}
-	} while (strcmp("001", command) != 0);
+	if (!wait_for_command("001", MAX_WELCOME_WAIT)) {
+		WARNING("%s did not return 001 RPL_WELCOME; Disconnecting\n", host);
+		goto error1;
+	}
 	DEBUG("001 RPL_WELCOME recieved\n");
 
 	/* Waiting for 376 RPL_ENDOFMOTD */
-	old_time = time(NULL);
-	do {
-		parse_message();
-		if (time(NULL) - old_time > MAX_WELCOME_WAIT) {
-			WARNING("%s did not finish MOTD; Disconnecting\n", host);
-			goto error1;
-		}
-	} while (strcmp("376", command) != 0);
+	if (!wait_for_command("376", MAX_WELCOME_WAIT)) {
+		WARNING("%s did not finish MOTD; Disconnecting\n", host);
+		goto error1;
+	}
 	DEBUG("376 RPL_ENDOFMOTD recieved\n");
 
 	/* Joining channel and waiting for 332 RPL_TOPIC */
 	send_message("JOIN #%s", chan);
-	old_time = time(NULL);
-	do {
-		parse_message();
-		if (time(NULL) - old_time > MAX_WELCOME_WAIT) {
-			WARNING("Could not join #%s; Continuing...\n", chan);
-			WARNING("  Note: This may cause your download request to be rejected\n");
-			break;
-		}
-	} while (strcmp("332", command) != 0);
-	DEBUG("Joined #%s\n", chan);
+	if (!wait_for_command("332", MAX_WELCOME_WAIT)) {
+		WARNING("Could not join #%s; Continuing...\n", chan);
+		WARNING("  Note: This may cause your download request to be rejected\n");
+	} else {
+		DEBUG("Joined #%s\n", chan);
+	}
 
 	/* Main IRC loop */
-	for (q = queue_head; q; q = q->next, timeout = false) {
+	for (q = queue_head; q; q = q->next) {
 		/* Create a seperate thread to handle pinging,
 		 * as the main thread may get blocked */
 		pthread_create(&ping_thread, NULL, ping, NULL);
@@ -385,21 +389,12 @@ void do_irc()
 		 * us trying to negotiate a DCC connection */
 		pthread_cancel(ping_thread);
 
+		DEBUG("Past blocking point\n");
+
 		/* Retrieving package number from bot */
 		send_message("PRIVMSG %s :@find %s", q->series->bot, q->title);
-		DEBUG("PRIVMSG %s :@find %s\n", q->series->bot, q->title);
-		old_time = time(NULL);
-		do {
-			parse_message();
-			if (time(NULL) - old_time > MAX_BOT_WAIT) {
-				WARNING("%s did not respond with package list; Skipping entry\n", q->series->bot);
-				timeout = true;
-				break;
-			}
-		} while (strcmp(prefix, q->series->bot) != 0 &&
-			 strncmp("XDCC SERVER", trail, 11) != 0);
-
-		if (timeout) {
+		if (!wait_for_trail("XDCC SERVER", q->series->bot, MAX_BOT_WAIT)) {
+			WARNING("%s did not respond with package list; Skipping entry\n", q->series->bot);
 			sem_post(&dcc_download);
 			continue;
 		}
@@ -410,19 +405,8 @@ void do_irc()
 
 		/* Requesting package */
 		send_message("PRIVMSG %s :xdcc send %s", q->series->bot, trail);
-		DEBUG("PRIVMSG %s :xdcc send %s\n", q->series->bot, trail);
-		old_time = time(NULL);
-		do {
-			parse_message();
-			if (time(NULL) - old_time > MAX_BOT_WAIT) {
-				WARNING("%s did not send DCC request; Skipping entry\n", q->series->bot);
-				timeout = true;
-				break;
-			}
-		} while (strcmp(prefix, q->series->bot) != 0 &&
-			 strncmp("\001DCC SEND", trail, 9) != 0);
-
-		if (timeout) {
+		if (!wait_for_trail("\001DCC SEND", q->series->bot, MAX_BOT_WAIT)) {
+			WARNING("%s did not send DCC request; Skipping entry\n", q->series->bot);
 			sem_post(&dcc_download);
 			continue;
 		}
@@ -448,7 +432,6 @@ void do_irc()
 	LOG("Download queue completed; Disconnecting\n");
 
 error1:
-	DEBUG("QUIT\n");
 	send_message("QUIT");
 	free(buf);
 	bufsize = 0;
@@ -463,10 +446,6 @@ error0:
 		free(tmp);
 	}
 	queue_head = NULL;
-	prefix = &nul;
-	command = &nul;
-	params = &nul;
-	trail = &nul;
 
 	fclose(srv);
 	close(sfd);
