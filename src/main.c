@@ -350,7 +350,7 @@ int main (int argc, char *argv[])
 		rss_config_finalize();
 
 		/* 5 minutes */
-		sleep(5);
+		sleep(300);
 	}
 
 	main_config_finalize();
