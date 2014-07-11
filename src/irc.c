@@ -28,6 +28,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -48,7 +49,7 @@ char *prefix, *command, *params, *trail;
 char nul = '\0';
 
 pthread_t thread[MAX_NUM_THREADS], ping_thread;
-pthread_attr_t dcc_attr, ping_attr;
+pthread_attr_t dcc_attr;
 sem_t dcc_download;
 
 static void send_message(char *format, ...)
@@ -95,9 +96,6 @@ static void *dcc_do(void *data)
 
 	/* Main DCC loop */
 	while (1) {
-		printf("%s [%dKiB/%dKib] %.1f%%\n", dp->q->title,
-				dp->position>>10, dp->filesize>>10,
-				(float)dp->position / (float)dp->filesize * 100);
 		n = recv(sfd, dcc_buf, sizeof(dcc_buf), 0);
 
 		if (n < 1) {
@@ -106,15 +104,15 @@ static void *dcc_do(void *data)
 					if (need_ack)
 						send_ack(sfd, dp->position);
 			} else {
-				WARNING("Unexpected DCC failure for %s; Closing connection\n",
-						dp->q->title);
+				WARNING("Unexpected DCC failure for %s: %s; Closing connection\n",
+						dp->q->title, strerror(errno));
 				break;
 			}
 		}
 
 		if (write(dp->fd, dcc_buf, n) < 0) {
-			WARNING("Unable to write DCC to file for %s; Closing connection\n",
-					dp->q->title);
+			WARNING("Unable to write DCC to file for %s: %s; Closing connection\n",
+					dp->q->title, strerror(errno));
 			if (need_ack)
 				send_ack(sfd, dp->position);
 			break;
@@ -125,7 +123,6 @@ static void *dcc_do(void *data)
 
 		if (dp->position >= dp->filesize) {
 			send_ack(sfd, dp->position);
-			LOG("\r");
 			LOG("Sucessfully downloaded %s\n", dp->q->title);
 			config_add_episode(dp->q->series, dp->q->title);
 			break;
@@ -180,7 +177,7 @@ static void parse_message()
 		send_message("PONG %s", trail?trail:params);
 }
 
-static void *ping(void *data)
+static void *ping()
 {
 	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
 	while (1) {
@@ -199,6 +196,7 @@ static void dcc_create(struct queue_ent *q, char *dcc, int i)
 	char pos_str[20];
 	char filename[256] = {0};
 	time_t old_time;
+	off_t off;
 
 	d = calloc(1, sizeof(*d));
 	if (!d) {
@@ -232,8 +230,8 @@ static void dcc_create(struct queue_ent *q, char *dcc, int i)
 	strcat(filename, "/");
 	strcat(filename, q->title);
 
-	d->fd = open(filename, O_CREAT | O_WRONLY);
-	if (d < 0) {
+	d->fd = open(filename, O_CREAT | O_WRONLY, 0644);
+	if (d->fd < 0) {
 		WARNING("Could not open %s for writing; Skipping entry...\n", q->title);
 		free(d->ip);
 		free(d->port);
@@ -249,8 +247,9 @@ static void dcc_create(struct queue_ent *q, char *dcc, int i)
 			DEBUG("Existing file found; Attempting DCC resume...\n");
 
 			if (d->position >= d->filesize) {
-				LOG("Found completed %s; Skipping", q->title);
-			sem_post(&dcc_download);
+				LOG("Found completed %s; Skipping\n", q->title);
+				config_add_episode(q->series, q->title);
+				sem_post(&dcc_download);
 				return;
 			}
 
@@ -272,7 +271,12 @@ static void dcc_create(struct queue_ent *q, char *dcc, int i)
 				 strncmp("\001DCC ACCEPT", trail, 11) != 0);
 
 			LOG("Resuming %s\n", q->title);
-			lseek(d->fd, 0, SEEK_END);
+
+			off = lseek(d->fd, d->position, SEEK_SET);
+			if (off != d->position) {
+				WARNING("Cannot seek file; skipping entry...\n");
+				return;
+			}
 		}
 	} else {
 		WARNING("Could not stat %s; Assuming it's empty\n", q->title);
@@ -365,12 +369,14 @@ void do_irc()
 	for (q = queue_head; q; q = q->next, timeout = false) {
 		/* Create a seperate thread to handle pinging,
 		 * as the main thread may get blocked */
-		pthread_create(&ping_thread, &ping_attr, ping, NULL);
+		pthread_create(&ping_thread, NULL, ping, NULL);
 
+#ifdef ENABLE_DEBUG
 		int semv;
 		sem_getvalue(&dcc_download, &semv);
-		DEBUG("Trying to grab semaphore\n");
 		DEBUG("Current semaphore value is %d\n", semv);
+		DEBUG("Trying to grab semaphore\n");
+#endif
 
 		/* Block when max threads are open */
 		sem_wait(&dcc_download);
@@ -429,17 +435,25 @@ void do_irc()
 		dcc_create(q, ++trail, i++);
 	}
 
+	pthread_create(&ping_thread, NULL, ping, NULL);
+
 	/* Block if everything hasn't completed */
-	int val;
+	int semv;
 	do
-		sem_getvalue(&dcc_download, &val);
-	while (val != MAX_NUM_THREADS);
+		sem_getvalue(&dcc_download, &semv);
+	while (semv != MAX_NUM_THREADS);
+
+	pthread_cancel(ping_thread);
 
 	LOG("Download queue completed; Disconnecting\n");
 
 error1:
+	DEBUG("QUIT\n");
 	send_message("QUIT");
 	free(buf);
+	bufsize = 0;
+	sem_destroy(&dcc_download);
+	pthread_attr_destroy(&dcc_attr);
 
 error0:
 	q = queue_head;
@@ -448,6 +462,11 @@ error0:
 		q = q->next;
 		free(tmp);
 	}
+	queue_head = NULL;
+	prefix = &nul;
+	command = &nul;
+	params = &nul;
+	trail = &nul;
 
 	fclose(srv);
 	close(sfd);

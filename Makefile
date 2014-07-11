@@ -8,9 +8,9 @@ EXECUTABLE = rssdcc-bot
 
 all: $(SOURCES) $(EXECUTABLE)
 
-debug: CFLAGS += -g
+debug: CFLAGS += -g -Wextra
 debug: CPPFLAGS += -DENABLE_DEBUG
-debug: all
+debug: $(SOURCES) $(EXECUTABLE)
 
 $(EXECUTABLE): $(OBJECTS)
 	@echo "  LD        $@"

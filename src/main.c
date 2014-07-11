@@ -211,19 +211,23 @@ static void main_config_finalize()
 	free(nick);
 }
 
-static void main_config_init()
+static void main_config_init(char *config_file)
 {
 	FILE *file;
 	char *buf = NULL;
 	size_t bufsize = 0;
 	char path[255] = {0};
-	
-	strcat(path, getenv("HOME"));
-	strcat(path, "/.rssdcc");
 
-	file = fopen(path, "r");
+	if (!config_file) {	
+		strcat(path, getenv("HOME"));
+		strcat(path, "/.rssdcc");
+
+		config_file = path;
+	}
+
+	file = fopen(config_file, "r");
 	if (!file) {
-		fprintf(stderr, "%s not found; Exiting...\n", path);
+		fprintf(stderr, "%s not found; Exiting...\n", config_file);
 		exit(EXIT_FAILURE);
 	}
 
@@ -265,6 +269,21 @@ static void main_config_init()
 int main (int argc, char *argv[])
 {
 	pid_t pid, sid;
+	char *config_file = NULL;
+
+	switch (argc) {
+	case 1:
+		break;
+	case 3:
+		if (!strcmp("-c", argv[1])) {
+			config_file = argv[2];
+			break;
+		}
+		/* Fallthrough */
+	default:
+		printf("USAGE: %s [-c config_file]\n", argv[0]);
+		exit(EXIT_FAILURE);
+	}
 
 	/* Daemon initialisation*/
 	/* Fork off the parent process */
@@ -279,7 +298,7 @@ int main (int argc, char *argv[])
 	/* Default umask for Downloads */
 	umask(0133);
 
-	main_config_init();
+	main_config_init(config_file);
 
 	/* Opening the log */
 	logfile = fopen(logfile_name, "w");
@@ -331,7 +350,7 @@ int main (int argc, char *argv[])
 		rss_config_finalize();
 
 		/* 5 minutes */
-		sleep(300);
+		sleep(5);
 	}
 
 	main_config_finalize();
