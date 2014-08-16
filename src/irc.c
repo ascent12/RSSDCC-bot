@@ -360,6 +360,9 @@ void do_irc()
 	}
 	DEBUG("376 RPL_ENDOFMOTD recieved\n");
 
+	/* Using registered nick */
+	send_message("PRIVMSG NickServ :IDENTIFY %s", pass);
+
 	/* Joining channel and waiting for 332 RPL_TOPIC */
 	send_message("JOIN #%s", chan);
 	if (!wait_for_command("332", MAX_WELCOME_WAIT)) {

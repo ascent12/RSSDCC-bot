@@ -209,6 +209,11 @@ static void main_config_finalize()
 	free(host);
 	free(port);
 	free(nick);
+	free(pass);
+	free(chan);
+	free(logfile_name);
+	free(feeds_name);
+	free(downloads_name);
 }
 
 static void main_config_init(char *config_file)
@@ -243,6 +248,9 @@ static void main_config_init(char *config_file)
 
 		if (!strncmp("nick", buf, 4))
 			read_config(buf, &nick);
+
+		if (!strncmp("pass", buf, 4))
+			read_config(buf, &pass);
 
 		if (!strncmp("chan", buf, 4))
 			read_config(buf, &chan);
