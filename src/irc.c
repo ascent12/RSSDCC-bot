@@ -326,13 +326,13 @@ void do_irc()
 	if (!srv) {
 		WARNING("Unable to open socket as file for %s:%s; Download queue failed...\n",
 				host, port);
-		goto error0;
+		goto error1;
 	}
 
 	/* Creating a semaphore to limit amount of concurrent downloads */
 	if (sem_init(&dcc_download, 0, MAX_NUM_THREADS) < 0) {
 		WARNING("Unable to open semaphore; Download queue failed...\n");
-		goto error0;
+		goto error1;
 	}
 
 	/* Setting pthread attributes, which are used later */
@@ -349,14 +349,14 @@ void do_irc()
 	/* Waiting for 001 RPL_WELCOME */
 	if (!wait_for_command("001", MAX_WELCOME_WAIT)) {
 		WARNING("%s did not return 001 RPL_WELCOME; Disconnecting\n", host);
-		goto error1;
+		goto error2;
 	}
 	DEBUG("001 RPL_WELCOME recieved\n");
 
 	/* Waiting for 376 RPL_ENDOFMOTD */
 	if (!wait_for_command("376", MAX_WELCOME_WAIT)) {
 		WARNING("%s did not finish MOTD; Disconnecting\n", host);
-		goto error1;
+		goto error2;
 	}
 	DEBUG("376 RPL_ENDOFMOTD recieved\n");
 
@@ -434,14 +434,18 @@ void do_irc()
 
 	LOG("Download queue completed; Disconnecting\n");
 
-error1:
+error2:
 	send_message("QUIT");
 	free(buf);
 	bufsize = 0;
 	sem_destroy(&dcc_download);
 	pthread_attr_destroy(&dcc_attr);
 
+error1:
+	fclose(srv);
 error0:
+	close(sfd);
+
 	q = queue_head;
 	while (q) {
 		tmp = q;
@@ -450,6 +454,4 @@ error0:
 	}
 	queue_head = NULL;
 
-	fclose(srv);
-	close(sfd);
 }
