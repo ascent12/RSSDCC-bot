@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -c -Wall -O2
+CFLAGS = -c -Wall -Os -pipe
 CPPFLAGS =
 LDFLAGS = -pthread
 SOURCES = $(wildcard src/*.c)
