@@ -55,8 +55,13 @@ static void queue_add(struct series_ent *sp, char *title)
 		queue_head = q;
 		queue_tail = q;
 	} else {
+		/* Old, downloads newest first queue
 		queue_tail->next = q;
-		queue_tail = q;
+		queue_tail = q; */
+
+		/* Now it's more of a linked list, and downloads oldest first */
+		q->next = queue_head;
+		queue_head = q;
 	}
 }
 
