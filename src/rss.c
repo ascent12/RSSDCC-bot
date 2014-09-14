@@ -154,7 +154,7 @@ void do_rss()
 
 		DEBUG("Querying %s/%s\n", sp->host, sp->link);
 
-		send_message("GET /%s HTTP/1.1", sp->link);
+		send_message("GET /%s HTTP/1.0", sp->link);
 		send_message("Host: %s", sp->host);
 		send_message("Connection: close\r\n");
 		fflush(srv);
